@@ -10,8 +10,10 @@
 import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import readline from "node:readline";
+import path from "node:path";
+import os from "node:os";
 import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
@@ -31,7 +33,7 @@ const DEFAULT_CLIENT_INFO = {
 
 /** @type {InitializeCapabilities} */
 const DEFAULT_CAPABILITIES = {
-  experimentalApi: false,
+  experimentalApi: true,
   requestAttestation: false,
   optOutNotificationMethods: [
     "item/agentMessage/delta",
@@ -180,6 +182,36 @@ class AppServerClientBase {
   }
 }
 
+// Keep native state, execution rules and config-relative paths in the caller's home.
+// The default companion profile suppresses MCP/plugin startup without copying configuration.
+// Explicit alternate homes retain their caller-supplied configuration. See docs/managed-fork.md.
+function appServerStartupOverrides(env, cwd) {
+  // The Windows launcher uses a shell; never pass dynamic configuration names through it.
+  if (process.platform === "win32") return [];
+  const defaultHome = path.join(os.homedir(), ".codex");
+  const home = env.CODEX_HOME || defaultHome;
+  if (path.resolve(home) !== defaultHome || !fs.existsSync(path.join(home, "config.toml"))) return [];
+  try {
+    const controls = ["-c", "features.plugins=false", "-c", "features.apps=false"];
+    // This native metadata command loads layered configuration without starting MCP servers.
+    // Its output may contain secrets: retain names only and never expose stdout/stderr on error.
+    const output = execFileSync("codex", ["mcp", "list", "--json", ...controls], {
+      cwd, env, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const servers = JSON.parse(output);
+    if (!Array.isArray(servers) || servers.length > 256 || servers.some(server =>
+      typeof server?.name !== "string" || !server.name.length || server.name.length > 256 ||
+      /[\u0000-\u001f\u007f]/.test(server.name))) return [];
+    // One inline TOML table preserves literal dots/quotes in names and merges transport settings.
+    const names = [...new Set(servers.map(server => server.name))];
+    if (names.length) controls.push("-c", `mcp_servers={${names.map(name => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`);
+    return controls;
+  } catch {
+    return []; // Metadata unavailable: retain canonical-home behavior, never relocate state.
+  }
+}
+
 class SpawnedCodexAppServerClient extends AppServerClientBase {
   constructor(cwd, options = {}) {
     super(cwd, options);
@@ -187,9 +219,12 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 
   async initialize() {
-    this.proc = spawn("codex", ["app-server"], {
+    const env = this.options.env ?? process.env;
+    const startupOverrides = appServerStartupOverrides(env, this.cwd);
+    // Disable memory use/generation independently of optional default-profile controls.
+    this.proc = spawn("codex", ["app-server", "-c", "memories.use_memories=false", "-c", "memories.generate_memories=false", ...startupOverrides], {
       cwd: this.cwd,
-      env: this.options.env ?? process.env,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
       windowsHide: true
@@ -227,6 +262,23 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
       capabilities: this.options.capabilities ?? DEFAULT_CAPABILITIES
     });
     this.notify("initialized", {});
+    if (startupOverrides.length) {
+      try {
+        const { config } = await this.request("config/read", { cwd: this.cwd, includeLayers: false });
+        const features = config.features;
+        const servers = config.mcp_servers ?? {};
+        if (!features || typeof features !== "object" || Array.isArray(features) ||
+          features.plugins !== false || features.apps !== false ||
+          typeof servers !== "object" || Array.isArray(servers) ||
+          Object.values(servers).some(server => !server || typeof server !== "object" ||
+            Array.isArray(server) || server.enabled !== false)) {
+          throw new Error("startup policy mismatch");
+        }
+      } catch {
+        await this.close();
+        throw new Error("Cannot verify MCP/plugin startup controls for the default companion profile.");
+      }
+    }
   }
 
   async close() {

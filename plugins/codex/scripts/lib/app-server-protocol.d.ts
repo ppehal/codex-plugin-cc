@@ -6,6 +6,10 @@ import type {
   ServerNotification
 } from "../../.generated/app-server-types/index.js";
 import type {
+  ConfigReadParams,
+  ConfigReadResponse,
+  GetAccountParams,
+  GetAccountResponse,
   ExternalAgentConfigImportParams,
   ExternalAgentConfigImportResponse,
   ReviewStartParams,
@@ -59,6 +63,8 @@ export interface CodexAppServerClientOptions {
 export interface AppServerMethodMap {
   initialize: { params: InitializeParams; result: InitializeResponse };
   "externalAgentConfig/import": { params: ExternalAgentConfigImportParams; result: ExternalAgentConfigImportResponse };
+  "config/read": { params: ConfigReadParams; result: ConfigReadResponse };
+  "account/read": { params: GetAccountParams; result: GetAccountResponse };
   "thread/start": { params: ThreadStartParams; result: ThreadStartResponse };
   "thread/resume": { params: ThreadResumeParams; result: ThreadResumeResponse };
   "thread/name/set": { params: ThreadSetNameParams; result: ThreadSetNameResponse };

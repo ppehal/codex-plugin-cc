@@ -64,7 +64,19 @@ function buildTurn(id, status = "inProgress", error = null) {
   return { id, status, items: [], error };
 }
 
+let configReads = 0;
+let accountReads = 0;
+function nativeFixture() {
+  return process.env.FAKE_CODEX_NATIVE_FIXTURE ? JSON.parse(fs.readFileSync(process.env.FAKE_CODEX_NATIVE_FIXTURE, "utf8")) : null;
+}
+
 function buildAccountReadResult() {
+  const fixture = nativeFixture();
+  if (fixture) {
+    accountReads += 1;
+    if (fixture.accountError) throw new Error("fixture account/read failure");
+    return { account: accountReads > 1 && fixture.secondAccount !== undefined ? fixture.secondAccount : fixture.account, requiresOpenaiAuth: true };
+  }
   switch (BEHAVIOR) {
     case "logged-out":
     case "refreshable-auth":
@@ -84,6 +96,12 @@ function buildAccountReadResult() {
 }
 
 function buildConfigReadResult() {
+  const fixture = nativeFixture();
+  if (fixture) {
+    configReads += 1;
+    if (fixture.configError) throw new Error("fixture config/read failure");
+    return { config: configReads > 1 && fixture.secondConfig ? fixture.secondConfig : fixture.config, origins: {} };
+  }
   switch (BEHAVIOR) {
     case "provider-no-auth":
       return {
@@ -267,11 +285,16 @@ if (args[0] === "login" && args[1] === "status") {
 if (args[0] === "login") {
   process.exit(0);
 }
+if (args.includes("mcp") && args.includes("list")) {
+  process.stdout.write(process.env.FAKE_CODEX_MCP_LIST || "[]");
+  process.exit(0);
+}
 if (args[0] !== "app-server") {
   process.exit(1);
 }
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
+bootState.launches = [...(bootState.launches || []), { pid: process.pid, argv: args, codexHome: process.env.CODEX_HOME ?? null }];
 saveState(bootState);
 
 const rl = readline.createInterface({ input: process.stdin });
@@ -281,6 +304,7 @@ rl.on("line", (line) => {
   }
 
   const message = JSON.parse(line);
+  if (process.env.FAKE_CODEX_NATIVE_FIXTURE) fs.appendFileSync(path.join(path.dirname(STATE_PATH), "requests.jsonl"), JSON.stringify({ pid: process.pid, method: message.method, params: message.params }) + "\\n");
   const state = loadState();
 
   try {
@@ -302,10 +326,28 @@ rl.on("line", (line) => {
         if (BEHAVIOR === "config-read-fails") {
           throw new Error("config/read failed for cwd");
         }
-        send({ id: message.id, result: buildConfigReadResult() });
+        {
+          const result = buildConfigReadResult();
+          if (!nativeFixture() && args.includes("features.plugins=false")) {
+            result.config.features = { plugins: false, apps: false };
+            result.config.mcp_servers = {};
+          }
+          send({ id: message.id, result });
+        }
         break;
 
+      case "thread/loaded/list": {
+        if (nativeFixture()?.loadedListError) throw new Error("fixture idle status unknown");
+        send({ id: message.id, result: { data: state.threads.map(thread => thread.id) } });
+        break;
+      }
+      case "thread/read": {
+        const thread = buildThread(ensureThread(state, message.params.threadId));
+        send({ id: message.id, result: { thread } });
+        break;
+      }
       case "thread/start": {
+        if (requiresExperimental("permissions", message, state)) throw new Error("named permissions require experimentalApi");
         if (BEHAVIOR === "auth-run-fails") {
           throw new Error("authentication expired; run codex login");
         }
@@ -313,7 +355,7 @@ rl.on("line", (line) => {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
-        send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
+        send({ id: message.id, result: { ...(nativeFixture() ? { activePermissionProfile: nativeFixture().activePermissionProfile ?? null } : {}), thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
         send({ method: "thread/started", params: { thread: { id: thread.id } } });
         break;
       }

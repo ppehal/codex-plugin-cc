@@ -19,7 +19,8 @@ import {
     parseStructuredOutput,
     readOutputSchema,
     runAppServerReview,
-    runAppServerTurn
+    runAppServerTurn,
+    validateReadonlyPolicy
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
@@ -80,6 +81,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task --permissions <id> --permissions-policy-file <json> [--fresh] [--background] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -488,7 +490,8 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "read-only",
+    ...(request.permissions ? { permissions: request.permissions } : { sandbox: request.write ? "workspace-write" : "read-only" }),
+    permissionsPolicy: request.permissionsPolicy ?? null,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -512,6 +515,11 @@ async function executeTaskRun(request) {
     status: result.status,
     threadId: result.threadId,
     rawOutput,
+    ...(request.permissions ? {
+      activePermissionProfile: result.activePermissionProfile,
+      effectiveToolPolicy: result.effectiveToolPolicy,
+      policyObservations: result.policyObservations
+    } : {}),
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary
   };
@@ -601,13 +609,14 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, permissions, permissionsPolicy, resumeLast, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
     write,
+    ...(permissions ? { permissions, permissionsPolicy } : {}),
     resumeLast,
     jobId
   };
@@ -759,9 +768,31 @@ async function handleReview(argv) {
   });
 }
 
+// Bound reads even if the file grows, and never block on a pipe or device.
+function readReadonlyPolicy(file) {
+  const budget = 1024 * 1024;
+  if (!fs.lstatSync(file).isFile()) throw new Error("Readonly policy must be a regular file.");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.size > budget) throw new Error("Readonly policy file exceeds its budget or is not regular.");
+    const buffer = Buffer.alloc(budget + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length > budget) throw new Error("Readonly policy file exceeds its budget.");
+    return JSON.parse(buffer.subarray(0, length).toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "permissions", "permissions-policy-file"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -780,6 +811,18 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const permissions = options.permissions ?? null;
+  const policyFile = options["permissions-policy-file"];
+  const named = Object.hasOwn(options, "permissions") || Object.hasOwn(options, "permissions-policy-file");
+  let permissionsPolicy = null;
+  if (named) {
+    if (typeof permissions !== "string" || !permissions || typeof policyFile !== "string" || !policyFile) {
+      throw new Error("Named permissions require an exact expected readonly policy file.");
+    }
+    if (write || resumeLast) throw new Error("Named readonly permissions require a fresh, non-write task.");
+    permissionsPolicy = readReadonlyPolicy(path.resolve(cwd, policyFile));
+    validateReadonlyPolicy(permissions, permissionsPolicy);
+  }
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -796,6 +839,8 @@ async function handleTask(argv) {
       effort,
       prompt,
       write,
+      permissions,
+      permissionsPolicy,
       resumeLast,
       jobId: job.id
     });
@@ -814,6 +859,8 @@ async function handleTask(argv) {
         effort,
         prompt,
         write,
+        permissions,
+        permissionsPolicy,
         resumeLast,
         jobId: job.id,
         onProgress: progress

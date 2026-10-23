@@ -1,0 +1,149 @@
+{
+  "config": {
+    "permissions": {
+      "readonly-fixture": {
+        "description": null,
+        "extends": ":read-only",
+        "workspace_roots": null,
+        "filesystem": {
+          ":root": "deny",
+          ":minimal": "read",
+          "/fixture/project": "read",
+          "/fixture/project/tmp": "deny"
+        },
+        "network": {
+          "enabled": false,
+          "proxy_url": null,
+          "enable_socks5": null,
+          "socks_url": null,
+          "enable_socks5_udp": null,
+          "allow_upstream_proxy": null,
+          "dangerously_allow_non_loopback_proxy": null,
+          "dangerously_allow_all_unix_sockets": null,
+          "mode": null,
+          "domains": null,
+          "unix_sockets": null,
+          "allow_local_binding": null,
+          "mitm": null
+        }
+      }
+    },
+    "shell_environment_policy": {
+      "inherit": "none",
+      "ignore_default_excludes": null,
+      "exclude": null,
+      "set": {
+        "PATH": "/usr/bin:/bin",
+        "GIT_CONFIG_VALUE_0": "false",
+        "LANG": "C.UTF-8",
+        "GIT_CONFIG_KEY_0": "core.fsmonitor",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_VALUE_1": "false",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "HOME": "/fixture/project",
+        "GIT_CONFIG_KEY_1": "core.untrackedCache"
+      },
+      "include_only": null,
+      "filters": null,
+      "experimental_use_profile": null
+    },
+    "allow_login_shell": false,
+    "web_search": "disabled",
+    "cli_auth_credentials_store": "file",
+    "approval_policy": "never",
+    "features": {
+      "apps": false,
+      "plugins": false,
+      "hooks": false,
+      "browser_use": false,
+      "browser_use_external": false,
+      "browser_use_full_cdp_access": false,
+      "browser_annotation_api": false,
+      "computer_use": false,
+      "skill_mcp_dependency_install": false,
+      "multi_agent": false,
+      "multi_agent_v2": false,
+      "multi_agent_v2_dynamic_tools": false,
+      "remote_plugin": false,
+      "plugin_sharing": false,
+      "in_app_browser": false,
+      "in_app_local_automation": false,
+      "image_generation": false,
+      "shell_snapshot": false
+    },
+    "mcp_servers": {}
+  },
+  "account": {
+    "type": "chatgpt",
+    "email": "fixture@example.invalid",
+    "planType": "fixture"
+  },
+  "expected": {
+    "version": "local-review-policy/v1",
+    "profile": "readonly-fixture",
+    "permissions": {
+      "extends": ":read-only",
+      "filesystem": {
+        ":root": "deny",
+        ":minimal": "read",
+        "/fixture/project": "read",
+        "/fixture/project/tmp": "deny"
+      },
+      "network": {
+        "enabled": false
+      }
+    },
+    "shell_environment_policy": {
+      "inherit": "none",
+      "set": {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/fixture/project",
+        "LANG": "C.UTF-8",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "core.fsmonitor",
+        "GIT_CONFIG_VALUE_0": "false",
+        "GIT_CONFIG_KEY_1": "core.untrackedCache",
+        "GIT_CONFIG_VALUE_1": "false"
+      }
+    },
+    "allow_login_shell": false,
+    "web_search": "disabled",
+    "approval_policy": "never",
+    "cli_auth_credentials_store": "file",
+    "features": {
+      "apps": false,
+      "plugins": false,
+      "hooks": false,
+      "browser_use": false,
+      "browser_use_external": false,
+      "browser_use_full_cdp_access": false,
+      "browser_annotation_api": false,
+      "computer_use": false,
+      "skill_mcp_dependency_install": false,
+      "multi_agent": false,
+      "multi_agent_v2": false,
+      "multi_agent_v2_dynamic_tools": false,
+      "remote_plugin": false,
+      "plugin_sharing": false,
+      "in_app_browser": false,
+      "in_app_local_automation": false,
+      "image_generation": false,
+      "shell_snapshot": false
+    },
+    "mcp_enabled": [],
+    "account_type": "chatgpt",
+    "account_fingerprint": "cc6d96611cffa9f02c3626f0b9ee897dc171e2d540a5cae349d4ec316104997b",
+    "provider": "openai",
+    "endpoint": "https://chatgpt.com/backend-api/"
+  },
+  "profile": "readonly-fixture",
+  "activePermissionProfile": {
+    "id": "readonly-fixture",
+    "extends": ":read-only"
+  }
+}
