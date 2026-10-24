@@ -35,6 +35,7 @@
  * }} TurnCaptureState
  */
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,13 +60,95 @@ function cleanCodexStderr(stderr) {
     .join("\n");
 }
 
+// Managed fork: disable memories on fresh and resumed threads, including warm brokers.
+const COMPANION_MEMORIES_OFF = { "memories.use_memories": false, "memories.generate_memories": false };
+const READONLY_FEATURES = Object.freeze([
+  "apps", "plugins", "hooks", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
+  "browser_annotation_api", "computer_use", "skill_mcp_dependency_install", "multi_agent", "multi_agent_v2",
+  "multi_agent_v2_dynamic_tools", "remote_plugin", "plugin_sharing", "in_app_browser", "in_app_local_automation",
+  "image_generation", "shell_snapshot"
+]);
+
+function exactKeys(value, keys) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+/** Validate only the opt-in local-review-policy/v1, never ordinary task policy. */
+export function validateReadonlyPolicy(profile, expected) {
+  const fields = ["version", "profile", "permissions", "shell_environment_policy", "allow_login_shell", "web_search",
+    "approval_policy", "cli_auth_credentials_store", "features", "mcp_enabled", "account_type", "account_fingerprint", "provider", "endpoint"];
+  const grants = expected?.permissions?.filesystem;
+  const environment = expected?.shell_environment_policy;
+  if (typeof profile !== "string" || !/^[A-Za-z0-9_.-][A-Za-z0-9_.:-]*$/.test(profile)
+      || !exactKeys(expected, fields) || expected.version !== "local-review-policy/v1" || expected.profile !== profile
+      || !exactKeys(expected.permissions, ["extends", "filesystem", "network"]) || expected.permissions.extends !== ":read-only"
+      || !grants || typeof grants !== "object" || Array.isArray(grants) || grants[":root"] !== "deny"
+      || !Object.entries(grants).every(([key, value]) => (path.isAbsolute(key) || [":root", ":minimal"].includes(key)) && ["read", "deny"].includes(value))
+      || !exactKeys(expected.permissions.network, ["enabled"]) || expected.permissions.network.enabled !== false
+      || !exactKeys(environment, ["inherit", "set"]) || environment.inherit !== "none"
+      || !environment.set || typeof environment.set !== "object" || Array.isArray(environment.set) || !Object.keys(environment.set).length
+      || !Object.entries(environment.set).every(([key, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === "string" && !value.includes("\0"))
+      || expected.allow_login_shell !== false || expected.web_search !== "disabled" || expected.approval_policy !== "never"
+      || expected.cli_auth_credentials_store !== "file" || !exactKeys(expected.features, READONLY_FEATURES)
+      || !READONLY_FEATURES.every(key => expected.features[key] === false)
+      || !Array.isArray(expected.mcp_enabled) || expected.mcp_enabled.length !== 0
+      || expected.account_type !== "chatgpt" || typeof expected.account_fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(expected.account_fingerprint)
+      || expected.provider !== "openai" || expected.endpoint !== "https://chatgpt.com/backend-api/") {
+    throw new Error("Expected named readonly policy must satisfy the complete restrictive local-review-policy/v1 contract.");
+  }
+  return expected;
+}
+
+function withoutNulls(value) {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== null && item !== undefined).map(([key, item]) => [key, withoutNulls(item)])
+  );
+  return value;
+}
+
+/** @param {Awaited<ReturnType<typeof CodexAppServerClient.connect>>} client */
+async function observeReadonlyPolicy(client, cwd, profile, expected) {
+  const response = await client.request("config/read", { cwd, includeLayers: false });
+  const config = /** @type {Record<string, any>} */ (response.config ?? {});
+  const accountResponse = await client.request("account/read", { refreshToken: false });
+  const account = accountResponse.account;
+  const endpoint = new URL(config.chatgpt_base_url ?? "https://chatgpt.com/backend-api/");
+  if (account?.type !== "chatgpt" || typeof account.email !== "string" || !account.email.trim()
+      || typeof account.planType !== "string" || !account.planType
+      || ![null, undefined, "openai"].includes(config.model_provider) || config.model_providers?.openai
+      || config.openai_base_url || ![null, undefined, "chatgpt"].includes(config.forced_login_method)
+      || endpoint.protocol !== "https:" || endpoint.hostname !== "chatgpt.com" || endpoint.username || endpoint.password
+      || endpoint.search || endpoint.hash || (endpoint.port && endpoint.port !== "443") || endpoint.pathname.replace(/\/+$/, "") !== "/backend-api") {
+    throw new Error("Actual broker subscription authority differs; no turn started.");
+  }
+  const observed = {
+    version: "local-review-policy/v1", profile,
+    permissions: withoutNulls(config.permissions?.[profile]),
+    shell_environment_policy: withoutNulls(config.shell_environment_policy),
+    allow_login_shell: config.allow_login_shell, web_search: config.web_search,
+    approval_policy: config.approval_policy, cli_auth_credentials_store: config.cli_auth_credentials_store,
+    features: Object.fromEntries(READONLY_FEATURES.map(name => [name, config.features?.[name]])),
+    mcp_enabled: Object.entries(config.mcp_servers ?? {}).filter(([, value]) => !value || value.enabled !== false).map(([name]) => name).sort(),
+    account_type: account.type,
+    account_fingerprint: crypto.createHash("sha256").update(account.email.trim().toLowerCase()).digest("hex"),
+    provider: "openai", endpoint: "https://chatgpt.com/backend-api/"
+  };
+  if (!isDeepStrictEqual(observed, expected)) {
+    throw new Error("Actual broker readonly profile/config/account differs; no turn started.");
+  }
+  return observed;
+}
+
 /** @returns {ThreadStartParams} */
 function buildThreadParams(cwd, options = {}) {
   return {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "read-only",
+    ...(options.permissions ? { permissions: options.permissions } : { sandbox: options.sandbox ?? "read-only" }),
+    config: COMPANION_MEMORIES_OFF,
     serviceName: SERVICE_NAME,
     ephemeral: options.ephemeral ?? true
   };
@@ -78,7 +161,8 @@ function buildResumeParams(threadId, cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "read-only"
+    sandbox: options.sandbox ?? "read-only",
+    config: COMPANION_MEMORIES_OFF
   };
 }
 
@@ -1093,6 +1177,16 @@ export async function importExternalAgentSession(cwd, options = {}) {
 }
 
 export async function runAppServerTurn(cwd, options = {}) {
+  const named = options.permissions != null || options.permissionsPolicy != null;
+  if (named) {
+    options = { ...options, permissionsPolicy: structuredClone(options.permissionsPolicy) };
+    validateReadonlyPolicy(options.permissions, options.permissionsPolicy);
+    if (Object.hasOwn(options, "sandbox") || Object.hasOwn(options, "sandboxPolicy") || options.write
+        || options.resumeThreadId || options.resume || options.resumeLast
+        || options.approvalPolicy !== undefined && options.approvalPolicy !== "never") {
+      throw new Error("Named readonly permissions require a fresh task without legacy policy or write overrides.");
+    }
+  }
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1100,6 +1194,8 @@ export async function runAppServerTurn(cwd, options = {}) {
 
   return withAppServer(cwd, async (client) => {
     let threadId;
+    let activePermissionProfile = null;
+    const beforeThread = named ? await observeReadonlyPolicy(client, cwd, options.permissions, options.permissionsPolicy) : null;
 
     if (options.resumeThreadId) {
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
@@ -1113,11 +1209,15 @@ export async function runAppServerTurn(cwd, options = {}) {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       const response = await startThread(client, cwd, {
         model: options.model,
-        sandbox: options.sandbox,
+        ...(named ? { permissions: options.permissions } : { sandbox: options.sandbox }),
         ephemeral: options.persistThread ? false : true,
         threadName: options.persistThread ? options.threadName : options.threadName ?? null
       });
       threadId = response.thread.id;
+      activePermissionProfile = response.activePermissionProfile ?? null;
+    }
+    if (named && (activePermissionProfile?.id !== options.permissions || activePermissionProfile?.extends !== ":read-only")) {
+      throw new Error("Actual named readonly permission profile was not accepted; no turn started.");
     }
 
     emitProgress(options.onProgress, `Thread ready (${threadId}).`, "starting", {
@@ -1129,6 +1229,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       throw new Error("A prompt is required for this Codex run.");
     }
 
+    const effectiveToolPolicy = named ? await observeReadonlyPolicy(client, cwd, options.permissions, options.permissionsPolicy) : null;
     const turnState = await captureTurn(
       client,
       threadId,
@@ -1138,13 +1239,15 @@ export async function runAppServerTurn(cwd, options = {}) {
           input: buildTurnInput(prompt),
           model: options.model ?? null,
           effort: options.effort ?? null,
-          outputSchema: options.outputSchema ?? null
+          outputSchema: options.outputSchema ?? null,
+          ...(named ? { permissions: options.permissions } : {})
         }),
       { onProgress: options.onProgress }
     );
 
     return {
       status: buildResultStatus(turnState),
+      ...(named ? { activePermissionProfile, effectiveToolPolicy, policyObservations: { beforeThread, beforeTurn: effectiveToolPolicy } } : {}),
       threadId,
       turnId: turnState.turnId,
       finalMessage: turnState.lastAgentMessage,
