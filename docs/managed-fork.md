@@ -1,7 +1,7 @@
 # Managed fork
 
 This is `ppehal/codex-plugin-cc`, maintained from `openai/codex-plugin-cc` commit
-`db52e28f4d9ded852ab3942cea316258ae4ef346` (1.0.6). Version `1.0.7-ppehal.1` identifies this fork's
+`db52e28f4d9ded852ab3942cea316258ae4ef346` (1.0.6). Version `1.0.7-ppehal.2` identifies this fork's
 changes; it is not an upstream OpenAI release. Original license and attribution remain intact.
 
 ## Named readonly tasks
@@ -55,7 +55,7 @@ fails before the turn and is not globally modified or killed.
 
 ## Preserved patches and provenance
 
-Three customizations from deployed 1.0.4 are maintained on upstream 1.0.6. Review required replacing
+Four customizations from deployed 1.0.4 are maintained on upstream 1.0.6. Review required replacing
 configuration relocation in the first customization:
 
 1. On POSIX, the default home with a config uses bounded native MCP metadata discovery and startup
@@ -71,6 +71,17 @@ configuration relocation in the first customization:
    user or unanswered/unknown work. Recycle is single flight; close is bounded. An inner death
    releases its clients; later requests recover. Tests change dummy auth files only.
 3. Fresh and resumed thread requests both disable memory use/generation, including warm brokers.
+4. SessionEnd retains a workspace broker while another session's live job, a job without an owner,
+   or unreadable job state remains. It reads both the index and per-job files. Known own turns receive
+   sequential interrupt requests within a shared bounded budget before the ending session's original
+   job cleanup. Unknown job statuses and pid-less records keep the broker. This fourth deployed patch
+   arrived after 1.0.7-ppehal.1; that earlier tag does not preserve this customization.
+
+SessionEnd preservation retains the deployed patch's accepted limits: job state is unlocked, so the
+snapshot-to-shutdown and cleanup read-modify-write windows remain; short untracked clients are outside
+its job-record guard. Own-turn interruption is best effort and does not instantly kill an already
+executing command. The shared interrupt deadline may overshoot by one short busy-retry backoff.
+No locking, per-session broker framework or host broker cleanup is introduced by this port.
 
 Compared with the old mirror, default-profile MCP suppression also covers loaded project/system
 servers. Existing mirror-only sessions in `~/.codex-appserver` are retained and are not automatically
