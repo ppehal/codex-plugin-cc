@@ -157,6 +157,48 @@ test("review renders a no-findings result from app-server review/start", () => {
   assert.match(result.stdout, /No material issues found/);
 });
 
+test("task help stays local before task inputs or provider state are resolved", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  for (const args of [
+    ["--help"],
+    ["-h"],
+    ["--help --effort invalid"],
+    ["--help", "--cwd", path.join(binDir, "missing"), "--prompt-file", "missing.md"]
+  ]) {
+    const home = makeTempDir();
+    const pluginData = path.join(home, "plugin-data");
+    const result = run("node", [SCRIPT, "task", ...args], {
+      cwd: ROOT,
+      env: { ...buildEnv(binDir), HOME: home, CODEX_HOME: path.join(home, ".codex"), CLAUDE_PLUGIN_DATA: pluginData, CODEX_COMPANION_APP_SERVER_ENDPOINT: "" }
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^Usage:/);
+    assert.equal(fs.existsSync(path.join(binDir, "fake-codex-state.json")), false);
+    assert.equal(fs.existsSync(pluginData), false);
+  }
+});
+
+test("task help parsing preserves literal and option-value boundaries", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  const env = { ...buildEnv(binDir), HOME: repo, CODEX_HOME: path.join(repo, ".codex"), CLAUDE_PLUGIN_DATA: path.join(repo, "plugin-data"), CODEX_COMPANION_APP_SERVER_ENDPOINT: "" };
+  for (const [args, prompt, model] of [
+    [["--", "--help"], "--help", null],
+    [["--model", "--help", "ping"], "ping", "--help"],
+    [["--help=false", "--unknown", "ping"], "--unknown ping", null]
+  ]) {
+    const result = run("node", [SCRIPT, "task", ...args], { cwd: repo, env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /^Usage:/);
+    const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+    assert.equal(state.lastTurnStart.prompt, prompt);
+    assert.equal(state.lastTurnStart.model, model);
+  }
+});
+
 test("task runs when the active provider does not require OpenAI login", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

@@ -165,6 +165,8 @@ Ask Codex to redesign the database connection to be more resilient.
 - if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
 - follow-up rescue requests can continue the latest Codex task in the repo
 
+The companion CLI's `task --help` (or `task -h`) prints local usage without creating a task or contacting Codex. `task -- --help` passes literal prompt text; `--help=false` is consumed as a false option and the remaining prompt runs normally.
+
 ### `/codex:transfer`
 
 Creates a persistent Codex thread from the current Claude Code session and prints a `codex resume <session-id>` command.
