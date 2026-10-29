@@ -7,7 +7,13 @@ import assert from "node:assert/strict";
 import { makeTempDir } from "./helpers.mjs";
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
 
-test("resolveStateDir uses a temp-backed per-workspace directory", () => {
+test("resolveStateDir uses a temp-backed per-workspace directory", (t) => {
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
+  t.after(() => {
+    if (previousPluginDataDir == null) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+  });
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
 
