@@ -170,7 +170,7 @@ test("task help stays local before task inputs or provider state are resolved", 
     const pluginData = path.join(home, "plugin-data");
     const result = run("node", [SCRIPT, "task", ...args], {
       cwd: ROOT,
-      env: { ...buildEnv(binDir), HOME: home, CODEX_HOME: path.join(home, ".codex"), CLAUDE_PLUGIN_DATA: pluginData }
+      env: { ...buildEnv(binDir), HOME: home, CODEX_HOME: path.join(home, ".codex"), CLAUDE_PLUGIN_DATA: pluginData, CODEX_COMPANION_APP_SERVER_ENDPOINT: "" }
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /^Usage:/);
@@ -184,7 +184,7 @@ test("task help parsing preserves literal and option-value boundaries", () => {
   const binDir = makeTempDir();
   installFakeCodex(binDir);
   initGitRepo(repo);
-  const env = { ...buildEnv(binDir), HOME: repo, CODEX_HOME: path.join(repo, ".codex"), CLAUDE_PLUGIN_DATA: path.join(repo, "plugin-data") };
+  const env = { ...buildEnv(binDir), HOME: repo, CODEX_HOME: path.join(repo, ".codex"), CLAUDE_PLUGIN_DATA: path.join(repo, "plugin-data"), CODEX_COMPANION_APP_SERVER_ENDPOINT: "" };
   for (const [args, prompt, model] of [
     [["--", "--help"], "--help", null],
     [["--model", "--help", "ping"], "ping", "--help"],
