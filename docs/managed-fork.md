@@ -55,8 +55,8 @@ fails before the turn and is not globally modified or killed.
 
 ## Preserved patches and provenance
 
-Four customizations from deployed 1.0.4 are maintained on upstream 1.0.6. Review required replacing
-configuration relocation in the first customization:
+Four customizations from deployed 1.0.4, and a fifth added later, are maintained on upstream 1.0.6.
+Review required replacing configuration relocation in the first customization:
 
 1. On POSIX, the default home with a config uses bounded native MCP metadata discovery and startup
    overrides to disable apps/plugins and every discovered MCP server, including loaded project/system
@@ -76,6 +76,11 @@ configuration relocation in the first customization:
    sequential interrupt requests within a shared bounded budget before the ending session's original
    job cleanup. Unknown job statuses and pid-less records keep the broker. This fourth deployed patch
    arrived after 1.0.7-ppehal.1; that earlier tag does not preserve this customization.
+5. SessionStart appends an export to `CLAUDE_ENV_FILE` only when the last assignment of that name
+   differs (`codex-env-file-idempotent-v1`). The hook fires again on every resume and compaction with
+   the same file; unconditional appends grew it until every Bash spawn of the session failed E2BIG
+   (2026-11-07, 537 repeats). The effective value stays last-wins. This patch was hand-applied to the
+   installed 1.0.7-ppehal.2 cache on 2026-11-07 and joined the fork source afterwards.
 
 SessionEnd preservation retains the deployed patch's accepted limits: job state is unlocked, so the
 snapshot-to-shutdown and cleanup read-modify-write windows remain; short untracked clients are outside

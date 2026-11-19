@@ -37,11 +37,30 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
+// local patch codex-env-file-idempotent-v1: SessionStart fires again on every resume, compaction
+// and /goal continuation with the same CLAUDE_ENV_FILE. Upstream appended three exports each time;
+// the harness passes the whole file as ONE argv string, so past MAX_ARG_STRLEN (128 KiB) every Bash
+// spawn of the session failed E2BIG (dev-1, 2026-11-07, 537 repeats). Append only when the last
+// assignment of the name differs, so the effective value stays last-wins and the file stays bounded.
 function appendEnvVar(name, value) {
   if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+  const line = `export ${name}=${shellEscape(value)}`;
+  let existing = "";
+  try {
+    existing = fs.readFileSync(process.env.CLAUDE_ENV_FILE, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const prefix = `export ${name}=`;
+  const last = existing.split("\n").filter((entry) => entry.startsWith(prefix)).at(-1);
+  if (last === line) {
+    return;
+  }
+  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${line}\n`, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
