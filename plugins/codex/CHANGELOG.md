@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.7-ppehal.3
+
+- Keep `CLAUDE_ENV_FILE` bounded across SessionStart repeats: append an export only when the last assignment of its name differs, one line per export (`codex-env-file-idempotent-v1`). Without it, resumes and compactions grew the file until every Bash spawn failed with E2BIG.
+
 ## 1.0.7-ppehal.2
 
 - Preserve the newly deployed SessionEnd safety patch: keep brokers serving another session, interrupt known own turns before cleanup, and retain the documented race/best-effort limits.

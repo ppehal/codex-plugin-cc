@@ -1,7 +1,7 @@
 # Managed fork
 
 This is `ppehal/codex-plugin-cc`, maintained from `openai/codex-plugin-cc` commit
-`db52e28f4d9ded852ab3942cea316258ae4ef346` (1.0.6). Version `1.0.7-ppehal.2` identifies this fork's
+`db52e28f4d9ded852ab3942cea316258ae4ef346` (1.0.6). Version `1.0.7-ppehal.3` identifies this fork's
 changes; it is not an upstream OpenAI release. Original license and attribution remain intact.
 
 ## Named readonly tasks
