@@ -37,11 +37,47 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
+// local patch codex-env-file-idempotent-v1: SessionStart fires again on every resume, compaction
+// and /goal continuation with the same CLAUDE_ENV_FILE. Upstream appended three exports each time;
+// the harness passes the whole file as ONE argv string, so past MAX_ARG_STRLEN (128 KiB) every Bash
+// spawn of the session failed E2BIG (dev-1, 2026-11-07, 537 repeats). Append only when the last
+// assignment of the name, in any writer's form, is not exactly this export: an unchanged value no
+// longer grows the file, and the effective value stays last-wins. A value with CR or LF is written
+// in ANSI-C quoting, so every export stays on one line and no value can start a line of its own.
+function envAssignment(name, value) {
+  const text = String(value);
+  if (!/[\r\n]/.test(text)) {
+    return `export ${name}=${shellEscape(text)}`;
+  }
+  const escaped = text.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+  return `export ${name}=$'${escaped}'`;
+}
+
+function lastAssignmentIs(existing, name, line) {
+  const assigns = new RegExp(`^\\s*(?:export\\s+)?${name}=`);
+  const last = existing.split("\n").filter((entry) => assigns.test(entry)).at(-1);
+  return last === line;
+}
+
 function appendEnvVar(name, value) {
   if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+  const line = envAssignment(name, value);
+  let existing = "";
+  let readable = true;
+  try {
+    existing = fs.readFileSync(process.env.CLAUDE_ENV_FILE, "utf8");
+  } catch (error) {
+    // Missing: start the file. Unreadable: append as upstream did rather than lose the export, on a
+    // line of its own because the file's last byte is unknown.
+    readable = error?.code === "ENOENT";
+  }
+  if (lastAssignmentIs(existing, name, line)) {
+    return;
+  }
+  const separator = readable && (existing === "" || existing.endsWith("\n")) ? "" : "\n";
+  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${separator}${line}\n`, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
