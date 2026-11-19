@@ -41,7 +41,20 @@ function shellEscape(value) {
 // and /goal continuation with the same CLAUDE_ENV_FILE. Upstream appended three exports each time;
 // the harness passes the whole file as ONE argv string, so past MAX_ARG_STRLEN (128 KiB) every Bash
 // spawn of the session failed E2BIG (dev-1, 2026-11-07, 537 repeats). Append only when the last
-// assignment of the name differs, so the effective value stays last-wins and the file stays bounded.
+// assignment of the name, in any writer's form, is not exactly this export: an unchanged value no
+// longer grows the file, and the effective value stays last-wins.
+function lastAssignmentIs(existing, name, line) {
+  const lines = existing.split("\n");
+  const assigns = new RegExp(`^\\s*(?:export\\s+)?${name}=`);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (assigns.test(lines[index])) {
+      const parts = line.split("\n");
+      return lines.slice(index, index + parts.length).join("\n") === line;
+    }
+  }
+  return false;
+}
+
 function appendEnvVar(name, value) {
   if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
     return;
@@ -50,17 +63,14 @@ function appendEnvVar(name, value) {
   let existing = "";
   try {
     existing = fs.readFileSync(process.env.CLAUDE_ENV_FILE, "utf8");
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
+  } catch {
+    // Unreadable or missing: append as upstream did rather than lose the export.
   }
-  const prefix = `export ${name}=`;
-  const last = existing.split("\n").filter((entry) => entry.startsWith(prefix)).at(-1);
-  if (last === line) {
+  if (lastAssignmentIs(existing, name, line)) {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${line}\n`, "utf8");
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${separator}${line}\n`, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {

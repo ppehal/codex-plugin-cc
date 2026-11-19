@@ -11,35 +11,62 @@ const HOOK =
   process.env.CODEX_TEST_SESSION_HOOK ||
   path.join(ROOT, "plugins/codex/scripts/session-lifecycle-hook.mjs");
 
-function sessionStart(envFile, data, input) {
-  const result = spawnSync(process.execPath, [HOOK, "SessionStart"], {
-    input: JSON.stringify(input),
-    env: { ...process.env, CLAUDE_ENV_FILE: envFile, CLAUDE_PLUGIN_DATA: data },
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-  return fs.readFileSync(envFile, "utf8").split("\n").filter(Boolean);
+function setup(t) {
+  const root = makeTempDir("ss-env-");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const envFile = path.join(root, "env.sh");
+  const data = path.join(root, "data");
+  const start = (input) => {
+    const result = spawnSync(process.execPath, [HOOK, "SessionStart"], {
+      input: JSON.stringify(input),
+      env: { ...process.env, CLAUDE_ENV_FILE: envFile, CLAUDE_PLUGIN_DATA: data },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return fs.readFileSync(envFile, "utf8");
+  };
+  return { root, envFile, data, start };
 }
 
 // SessionStart fires again on every resume and compaction with the same CLAUDE_ENV_FILE. Appending
 // unconditionally grew the file until every Bash spawn of the session failed with E2BIG.
-test("SessionStart keeps CLAUDE_ENV_FILE bounded and last-wins", () => {
-  const root = makeTempDir("ss-env-");
-  const envFile = path.join(root, "env.sh");
-  const data = path.join(root, "data");
-  const input = { session_id: "s-1", transcript_path: path.join(root, "t.jsonl") };
+test("SessionStart leaves CLAUDE_ENV_FILE unchanged on a repeat and keeps last-wins", (t) => {
+  const { root, data, start } = setup(t);
+  const transcript = path.join(root, "t.jsonl");
+  const exports = (id) =>
+    `export CODEX_COMPANION_SESSION_ID='${id}'\n` +
+    `export CODEX_COMPANION_TRANSCRIPT_PATH='${transcript}'\n` +
+    `export CLAUDE_PLUGIN_DATA='${data}'\n`;
+  const input = { session_id: "s-1", transcript_path: transcript };
 
-  const first = sessionStart(envFile, data, input);
-  assert.equal(first.length, 3);
-  assert.deepEqual(sessionStart(envFile, data, input), first);
+  const first = start(input);
+  assert.equal(first, exports("s-1"));
+  assert.equal(start(input), first);
 
-  const changed = sessionStart(envFile, data, { ...input, session_id: "s-2" });
-  assert.equal(changed.length, 4);
-  assert.equal(changed.at(-1), "export CODEX_COMPANION_SESSION_ID='s-2'");
-  assert.deepEqual(sessionStart(envFile, data, { ...input, session_id: "s-2" }), changed);
+  const changed = start({ ...input, session_id: "s-2" });
+  assert.equal(changed, `${first}export CODEX_COMPANION_SESSION_ID='s-2'\n`);
+  assert.equal(start({ ...input, session_id: "s-2" }), changed);
 
-  // Back to an earlier value: it must be appended again, so the last assignment stays effective.
-  const reverted = sessionStart(envFile, data, input);
-  assert.equal(reverted.length, 5);
-  assert.equal(reverted.at(-1), "export CODEX_COMPANION_SESSION_ID='s-1'");
+  // Back to an earlier value: appended again, so the last assignment stays the effective one.
+  assert.equal(start(input), `${changed}export CODEX_COMPANION_SESSION_ID='s-1'\n`);
+});
+
+test("SessionStart compares against any writer's last assignment and keeps lines separate", (t) => {
+  const { root, envFile, start } = setup(t);
+  const transcript = path.join(root, "a\nb.jsonl");
+  const input = { session_id: "s-1", transcript_path: transcript };
+
+  // Another hook's plain assignment after ours, and no trailing newline.
+  fs.writeFileSync(
+    envFile,
+    "export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'"
+  );
+  const first = start(input);
+  assert.ok(
+    first.startsWith(
+      "export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'\nexport CODEX_COMPANION_SESSION_ID='s-1'\n"
+    )
+  );
+  // A multi-line value is compared whole, so an unchanged one does not grow the file either.
+  assert.equal(start(input), first);
 });
