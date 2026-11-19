@@ -42,34 +42,41 @@ function shellEscape(value) {
 // the harness passes the whole file as ONE argv string, so past MAX_ARG_STRLEN (128 KiB) every Bash
 // spawn of the session failed E2BIG (dev-1, 2026-11-07, 537 repeats). Append only when the last
 // assignment of the name, in any writer's form, is not exactly this export: an unchanged value no
-// longer grows the file, and the effective value stays last-wins.
-function lastAssignmentIs(existing, name, line) {
-  const lines = existing.split("\n");
-  const assigns = new RegExp(`^\\s*(?:export\\s+)?${name}=`);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (assigns.test(lines[index])) {
-      const parts = line.split("\n");
-      return lines.slice(index, index + parts.length).join("\n") === line;
-    }
+// longer grows the file, and the effective value stays last-wins. A value with CR or LF is written
+// in ANSI-C quoting, so every export stays on one line and no value can start a line of its own.
+function envAssignment(name, value) {
+  const text = String(value);
+  if (!/[\r\n]/.test(text)) {
+    return `export ${name}=${shellEscape(text)}`;
   }
-  return false;
+  const escaped = text.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+  return `export ${name}=$'${escaped}'`;
+}
+
+function lastAssignmentIs(existing, name, line) {
+  const assigns = new RegExp(`^\\s*(?:export\\s+)?${name}=`);
+  const last = existing.split("\n").filter((entry) => assigns.test(entry)).at(-1);
+  return last === line;
 }
 
 function appendEnvVar(name, value) {
   if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
     return;
   }
-  const line = `export ${name}=${shellEscape(value)}`;
+  const line = envAssignment(name, value);
   let existing = "";
+  let readable = true;
   try {
     existing = fs.readFileSync(process.env.CLAUDE_ENV_FILE, "utf8");
-  } catch {
-    // Unreadable or missing: append as upstream did rather than lose the export.
+  } catch (error) {
+    // Missing: start the file. Unreadable: append as upstream did rather than lose the export, on a
+    // line of its own because the file's last byte is unknown.
+    readable = error?.code === "ENOENT";
   }
   if (lastAssignmentIs(existing, name, line)) {
     return;
   }
-  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  const separator = readable && (existing === "" || existing.endsWith("\n")) ? "" : "\n";
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `${separator}${line}\n`, "utf8");
 }
 

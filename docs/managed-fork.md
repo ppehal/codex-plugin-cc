@@ -79,11 +79,13 @@ Review required replacing configuration relocation in the first customization:
 5. SessionStart appends an export to `CLAUDE_ENV_FILE` only when the last assignment of that name
    differs (`codex-env-file-idempotent-v1`). The hook fires again on every resume and compaction with
    the same file; unconditional appends grew it until every Bash spawn of the session failed E2BIG
-   (2026-11-07, 537 repeats). Any last assignment of the name counts, multi-line values compare whole,
-   and an unreadable file falls back to appending; the effective value stays last-wins. A value that
-   keeps changing still grows the file, and two overlapping starts may each append once. This patch
-   was hand-applied to the installed 1.0.7-ppehal.2 cache on 2026-11-07 and joined the fork source
-   afterwards.
+   (2026-11-07, 537 repeats). Any writer's last `NAME=` or `export NAME=` line counts; a value with
+   CR or LF is written in ANSI-C quoting (`$'…'`), so every export is one line; an unreadable file
+   falls back to appending on a new line. The effective value stays last-wins. Accepted limits: the
+   line check does not parse shell, so another writer's here-document or multi-line quoted string
+   that holds a byte-identical copy of the export can suppress it; a value that keeps changing still
+   grows the file; two overlapping starts may each append once. This patch was hand-applied to the
+   installed 1.0.7-ppehal.2 cache on 2026-11-07 and joined the fork source afterwards.
 
 SessionEnd preservation retains the deployed patch's accepted limits: job state is unlocked, so the
 snapshot-to-shutdown and cleanup read-modify-write windows remain; short untracked clients are outside

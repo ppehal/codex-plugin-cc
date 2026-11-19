@@ -51,22 +51,19 @@ test("SessionStart leaves CLAUDE_ENV_FILE unchanged on a repeat and keeps last-w
   assert.equal(start(input), `${changed}export CODEX_COMPANION_SESSION_ID='s-1'\n`);
 });
 
-test("SessionStart compares against any writer's last assignment and keeps lines separate", (t) => {
+test("SessionStart compares against any writer's last assignment and keeps one line per export", (t) => {
   const { root, envFile, start } = setup(t);
-  const transcript = path.join(root, "a\nb.jsonl");
+  const transcript = path.join(root, "a\nCODEX_COMPANION_TRANSCRIPT_PATH=b'c.jsonl");
   const input = { session_id: "s-1", transcript_path: transcript };
 
   // Another hook's plain assignment after ours, and no trailing newline.
-  fs.writeFileSync(
-    envFile,
-    "export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'"
-  );
+  fs.writeFileSync(envFile, "export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'");
   const first = start(input);
-  assert.ok(
-    first.startsWith(
-      "export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'\nexport CODEX_COMPANION_SESSION_ID='s-1'\n"
-    )
-  );
-  // A multi-line value is compared whole, so an unchanged one does not grow the file either.
+  assert.ok(first.startsWith("export CODEX_COMPANION_SESSION_ID='s-1'\nCODEX_COMPANION_SESSION_ID='other'\nexport CODEX_COMPANION_SESSION_ID='s-1'\n"));
+  // A value with a newline stays on one line, so it cannot fake an assignment, and repeats do not grow.
+  assert.equal(first.split("\n").filter((entry) => entry.includes("CODEX_COMPANION_TRANSCRIPT_PATH=")).length, 1);
   assert.equal(start(input), first);
+  const sourced = spawnSync("bash", ["--noprofile", "--norc", "-c", `source "$1"; printf '%s' "$CODEX_COMPANION_TRANSCRIPT_PATH"`, "bash", envFile], { encoding: "utf8" });
+  assert.equal(sourced.status, 0, sourced.stderr);
+  assert.equal(sourced.stdout, transcript);
 });
