@@ -6,7 +6,7 @@
   "description": "Use Codex from Claude Code to review code or delegate tasks.",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "bump-version": "node scripts/bump-version.mjs",
